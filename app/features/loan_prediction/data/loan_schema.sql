@@ -9,9 +9,9 @@ CREATE TABLE IF NOT EXISTS loan_predict_train (
     education VARCHAR(20),
     self_employed VARCHAR(10),
 
-    applicant_income FLOAT,
-    coapplicant_income FLOAT,
-    loan_amount FLOAT,
+    applicantincome FLOAT,
+    coapplicantincome FLOAT,
+    loanamount FLOAT,
     loan_amount_term FLOAT,
     credit_history FLOAT,
     property_area VARCHAR(20),
