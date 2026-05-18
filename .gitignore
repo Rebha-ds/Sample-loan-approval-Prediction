@@ -14,11 +14,6 @@ venv/
 /loan_prediction/
 env/
 
-# ML Artifacts (large binary files)
-app/artifacts/model.pkl
-app/artifacts/scaler.pkl
-app/artifacts/encoders.pkl
-app/artifacts/feature_names.pkl
 
 # Jupyter
 .ipynb_checkpoints/
