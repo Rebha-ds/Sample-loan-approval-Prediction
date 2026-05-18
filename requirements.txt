@@ -1,0 +1,51 @@
+# -----------------------------
+# Core Backend Framework
+# -----------------------------
+fastapi
+uvicorn[standard]
+
+# -----------------------------
+# Frontend Dashboard
+# -----------------------------
+streamlit
+requests
+
+# -----------------------------
+# Database
+# -----------------------------
+sqlalchemy
+pymysql
+cryptography
+
+# -----------------------------
+# Authentication
+# -----------------------------
+passlib[bcrypt]
+python-jose[cryptography]
+joserfc
+python-multipart
+
+# -----------------------------
+# Machine Learning
+# -----------------------------
+scikit-learn
+pandas
+numpy
+joblib
+
+# -----------------------------
+# Visualization / Analytics
+# -----------------------------
+matplotlib
+plotly
+
+# -----------------------------
+# Environment Variables
+# -----------------------------
+python-dotenv
+
+# -----------------------------
+# Optional Production
+# -----------------------------
+gunicorn
+

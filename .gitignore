@@ -1,0 +1,25 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+
+# Virtual environment
+venv/
+/loan_prediction/
+env/
+
+# ML Artifacts (large binary files)
+app/artifacts/model.pkl
+app/artifacts/scaler.pkl
+app/artifacts/encoders.pkl
+app/artifacts/feature_names.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
