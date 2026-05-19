@@ -21,7 +21,8 @@ pydantic[email]
 # -----------------------------
 # Authentication
 # -----------------------------
-passlib[bcrypt]
+passlib[bcrypt]==1.7.4
+bcrypt ==4.0.1
 python-jose[cryptography]
 joserfc
 python-multipart
@@ -44,9 +45,3 @@ plotly
 # Environment Variables
 # -----------------------------
 python-dotenv
-
-# -----------------------------
-# Optional Production
-# -----------------------------
-gunicorn
-
