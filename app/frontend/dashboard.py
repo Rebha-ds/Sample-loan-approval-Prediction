@@ -121,7 +121,7 @@ elif menu == "Login":
 # -----------------------------
 elif menu == "Loan Prediction":
     st.title("Loan Eligibility Prediction")
-
+    st.write("Current User ID:", st.session_state.user_id)
     st.subheader("Enter Loan Details")
 
     gender = st.selectbox(

@@ -66,6 +66,7 @@ def predict_loan(payload, db: Session):
 
 
 def save_prediction(db, user_id, payload, prediction, confidence):
+    print("USER ID RECEIVED:", user_id)
     new_record = LoanPredictTrain(
         user_id=user_id,
         gender=payload.gender,
