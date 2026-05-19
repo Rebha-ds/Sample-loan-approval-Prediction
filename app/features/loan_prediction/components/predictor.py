@@ -82,10 +82,12 @@ def save_prediction(db, user_id, payload, prediction, confidence):
         prediction=prediction,
         confidence=confidence,
     )
-    db.add(new_record)
+    
     try:
+        db.add(new_record)
         db.commit()
+        db.refresh(new_record)
     except Exception as e:
         db.rollback()
-    db.refresh(new_record)
+        print(e)
     return new_record
