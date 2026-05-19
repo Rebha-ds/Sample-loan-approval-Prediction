@@ -16,6 +16,7 @@ requests
 sqlalchemy
 pymysql
 cryptography
+pydantic[email]
 
 # -----------------------------
 # Authentication
