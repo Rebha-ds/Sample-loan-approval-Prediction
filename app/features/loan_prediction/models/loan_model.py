@@ -25,7 +25,6 @@ class LoanPredictTrain(Base):
 
     prediction = Column("prediction", String(20), nullable=False)
     confidence = Column("confidence", Float,      nullable=False)
-    loan_status = Column("Loan_Status", String(10), nullable=True)
 
     created_at = Column(
         "created_at", TIMESTAMP,
