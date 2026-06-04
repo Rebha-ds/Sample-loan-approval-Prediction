@@ -8,12 +8,19 @@ app = FastAPI(
     version="1.0.0"
 )
 
+origins = [
+    "http://localhost:8501",           # Local Streamlit development
+    "https://sample-loan-approval-prediction-9bmcpazcjnhdsfibbtdw4k.streamlit.app/",  # Production Streamlit URL
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8501"],   # Streamlit dev URL
+    allow_origins=origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.get("/")
 def home():
