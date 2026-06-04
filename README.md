@@ -1,5 +1,8 @@
 # Loan Prediction System using Machine Learning
 
+## Try the app
+https://sample-loan-approval-prediction-9bmcpazcjnhdsfibbtdw4k.streamlit.app/
+
 ## Overview
 
 This project is a full-stack Machine Learning-based Loan Prediction System designed to predict whether a loan application will be approved or rejected based on applicant details and financial information.
