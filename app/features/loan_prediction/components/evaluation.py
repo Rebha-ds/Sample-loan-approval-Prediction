@@ -1,11 +1,13 @@
+# app/features/loan_prediction/components/evaluation.py
+
 import os
 import joblib
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
+
+from sklearn.dummy import DummyClassifier
+
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -13,322 +15,268 @@ from sklearn.metrics import (
     f1_score,
     confusion_matrix,
     classification_report,
-    log_loss
+    log_loss,
+    precision_recall_curve,
+    average_precision_score
 )
-from app.features.loan_prediction.utils.preprocessing import apply_feature_engineering
-from app.features.loan_prediction.components.data_ingestion import fetch_training_data
-from app.features.loan_prediction.utils.preprocessing import preprocess_data
+
+from app.features.loan_prediction.utils.preprocessing import (
+    rule_based_loan_baseline          # <-- added
+)
 
 
-# -----------------------------------------------------------------------
+# =========================================================
+# Artifact Paths
+# =========================================================
+ARTIFACT_DIR = "app/artifacts"
+
+MODEL_PATH      = os.path.join(ARTIFACT_DIR, "model.pkl")
+SCALER_PATH     = os.path.join(ARTIFACT_DIR, "scaler.pkl")
+ENCODER_PATH    = os.path.join(ARTIFACT_DIR, "encoders.pkl")
+FEATURE_PATH    = os.path.join(ARTIFACT_DIR, "feature_names.pkl")
+X_TRAIN_PATH    = os.path.join(ARTIFACT_DIR, "X_train.pkl")
+X_CV_PATH       = os.path.join(ARTIFACT_DIR, "X_cv.pkl")
+X_TEST_PATH     = os.path.join(ARTIFACT_DIR, "X_test.pkl")
+Y_TRAIN_PATH    = os.path.join(ARTIFACT_DIR, "y_train.pkl")
+Y_CV_PATH       = os.path.join(ARTIFACT_DIR, "y_cv.pkl")
+Y_TEST_PATH     = os.path.join(ARTIFACT_DIR, "y_test.pkl")
+THRESHOLD_PATH  = os.path.join(ARTIFACT_DIR, "threshold.pkl")
+RAW_TEST_PATH   = os.path.join(ARTIFACT_DIR, "raw_test.pkl")       # <-- added
+
+
+# =========================================================
 # Cost Function
-# -----------------------------------------------------------------------
+# =========================================================
 def compute_cost_logistic(X, y, w, b):
-    """
-    Computes logistic regression cost function.
-    Args:
-      X (ndarray (m,n)): Data, m examples with n features
-      y (ndarray (m,)) : target values
-      w (ndarray (n,)) : model parameters
-      b (scalar)       : model parameter
-    Returns:
-      cost (scalar): cost
-    """
     m = X.shape[0]
     cost = 0.0
     for i in range(m):
         z_i = np.dot(X[i], w) + b
         f_wb_i = 1 / (1 + np.exp(-z_i))
-        cost += -y[i] * np.log(f_wb_i + 1e-15) - (1 - y[i]) * np.log(1 - f_wb_i + 1e-15)
-    cost = cost / m
-    return cost
-    
+        cost += (
+            -y.iloc[i] * np.log(f_wb_i + 1e-15)
+            - (1 - y.iloc[i]) * np.log(1 - f_wb_i + 1e-15)
+        )
+    return cost / m
 
 
-# -----------------------------------------------------------------------
-# Cost Curve Plot (b-sweep and w-sweep, combined)
-# -----------------------------------------------------------------------
 def plot_cost_function(X, y):
-    """
-    Plots cost vs b (w fixed) and cost vs w-scale (b fixed) on the same graph.
-    For the w-sweep a scalar multiplier alpha scales a unit direction vector so
-    the x-axis represents a uniform weight scale.
-    """
+    baseline_model = DummyClassifier(strategy="most_frequent")
+    baseline_model.fit(X, y)
+    baseline_error = log_loss(y, baseline_model.predict_proba(X))
+
     n_features = X.shape[1]
-    base_w  = np.ones(n_features)
+    base_w = np.ones(n_features)
     fixed_b = 0.0
 
-    b_values     = np.linspace(-6, 0, 100)
-    costs_b      = [compute_cost_logistic(X, y, base_w, b) for b in b_values]
+    b_values = np.linspace(-6, 6, 100)
+    costs_b = [compute_cost_logistic(X, y, base_w, b) for b in b_values]
+    min_b_index = np.argmin(costs_b)
+    best_b, best_b_cost = b_values[min_b_index], costs_b[min_b_index]
 
     alpha_values = np.linspace(-3, 3, 100)
-    costs_w      = [compute_cost_logistic(X, y, a * base_w, fixed_b) for a in alpha_values]
+    costs_w = [compute_cost_logistic(X, y, a * base_w, fixed_b) for a in alpha_values]
+    min_alpha_index = np.argmin(costs_w)
+    best_alpha, best_alpha_cost = alpha_values[min_alpha_index], costs_w[min_alpha_index]
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    fig.suptitle("Logistic Regression Cost Function Analysis", fontsize=14, fontweight="bold")
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
-    # Panel 1 - Cost vs b
-    min_b_idx = np.argmin(costs_b)
-    axes[0].plot(b_values, costs_b, color="steelblue", linewidth=2)
-    axes[0].axvline(b_values[min_b_idx], color="tomato", linestyle="--", linewidth=1.2,
-                    label=f"Min at b={b_values[min_b_idx]:.2f}")
-    axes[0].set_xlabel("b (bias)", fontsize=11)
-    axes[0].set_ylabel("Cost", fontsize=11)
-    axes[0].set_title("Cost vs b\n(w = ones, fixed)", fontsize=11)
-    axes[0].legend(fontsize=9)
-    axes[0].grid(True, linestyle="--", alpha=0.6)
+    axes[0].plot(b_values, costs_b, linewidth=2, label="Cost Curve")
+    axes[0].scatter(best_b, best_b_cost, s=100, zorder=5, label=f"Minimum Cost\nb={best_b:.2f}")
+    axes[0].axvline(best_b, linestyle="--", linewidth=1.5)
+    axes[0].axhline(baseline_error, linestyle=":", linewidth=2, label=f"ZeroR Baseline = {baseline_error:.4f}")
+    axes[0].set_title("Cost vs Bias (b)")
+    axes[0].set_xlabel("Bias (b)")
+    axes[0].set_ylabel("Cost")
+    axes[0].legend()
+    axes[0].grid(True)
 
-    # Panel 2 - Cost vs w scale
-    min_w_idx = np.argmin(costs_w)
-    axes[1].plot(alpha_values, costs_w, color="darkorange", linewidth=2)
-    axes[1].axvline(alpha_values[min_w_idx], color="tomato", linestyle="--", linewidth=1.2,
-                    label=f"Min at alpha={alpha_values[min_w_idx]:.2f}")
-    axes[1].set_xlabel("w scale (alpha, where w = alpha * ones)", fontsize=11)
-    axes[1].set_ylabel("Cost", fontsize=11)
-    axes[1].set_title("Cost vs w scale\n(b = 0, fixed)", fontsize=11)
-    axes[1].legend(fontsize=9)
-    axes[1].grid(True, linestyle="--", alpha=0.6)
-
-    # Panel 3 - Both overlaid (x normalised to [0,1])
-    b_norm = (b_values - b_values.min()) / (b_values.max() - b_values.min())
-    a_norm = (alpha_values - alpha_values.min()) / (alpha_values.max() - alpha_values.min())
-    axes[2].plot(b_norm, costs_b, color="steelblue",  linewidth=2,
-                 label="Cost vs b  (w=ones, b swept)")
-    axes[2].plot(a_norm, costs_w, color="darkorange", linewidth=2, linestyle="--",
-                 label="Cost vs w  (b=0, alpha swept)")
-    axes[2].set_xlabel("Normalised parameter range [0 to 1]", fontsize=11)
-    axes[2].set_ylabel("Cost", fontsize=11)
-    axes[2].set_title("Cost vs b  &  Cost vs w\n(overlaid, x-axis normalised)", fontsize=11)
-    axes[2].legend(fontsize=9)
-    axes[2].grid(True, linestyle="--", alpha=0.6)
+    axes[1].plot(alpha_values, costs_w, linewidth=2, label="Cost Curve")
+    axes[1].scatter(best_alpha, best_alpha_cost, s=100, zorder=5, label=f"Minimum Cost\nα={best_alpha:.2f}")
+    axes[1].axvline(best_alpha, linestyle="--", linewidth=1.5)
+    axes[1].axhline(baseline_error, linestyle=":", linewidth=2, label=f"ZeroR Baseline = {baseline_error:.4f}")
+    axes[1].set_title("Cost vs Weight Scale")
+    axes[1].set_xlabel("Weight Scale (α)")
+    axes[1].set_ylabel("Cost")
+    axes[1].legend()
+    axes[1].grid(True)
 
     plt.tight_layout()
     plt.show()
 
-    print("\n===== COST FUNCTION SUMMARY =====")
-    print(f"Cost vs b  -> min cost = {min(costs_b):.4f}  at b = {b_values[min_b_idx]:.4f}")
-    print(f"Cost vs w  -> min cost = {min(costs_w):.4f}  at alpha = {alpha_values[min_w_idx]:.4f}")
+    print("\n===== COST FUNCTION ANALYSIS =====")
+    print(f"Best b value        : {best_b:.4f}")
+    print(f"Minimum cost (b)    : {best_b_cost:.4f}")
+    print(f"Best alpha value    : {best_alpha:.4f}")
+    print(f"Minimum cost (w)    : {best_alpha_cost:.4f}")
+    print(f"ZeroR baseline loss : {baseline_error:.4f}")
 
 
-# -----------------------------------------------------------------------
-# Bias / Variance helpers
-# -----------------------------------------------------------------------
-def _log_loss_score(model, X, y):
-    """Return mean log-loss using the model's predicted probabilities."""
-    proba = model.predict_proba(X)
-    return log_loss(y, proba)
+def plot_precision_recall_curve(y_true, y_proba, chosen_threshold=None):
+    precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba)
+    avg_precision = average_precision_score(y_true, y_proba)
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(recalls, precisions, linewidth=2, label=f"PR Curve (AP={avg_precision:.4f})")
+
+    if chosen_threshold is not None:
+        idx = np.argmin(np.abs(thresholds - chosen_threshold))
+        plt.scatter(
+            recalls[idx], precisions[idx],
+            color="red", s=100, zorder=5,
+            label=f"Production threshold = {chosen_threshold:.2f}\n"
+                  f"(P={precisions[idx]:.4f}, R={recalls[idx]:.4f})"
+        )
+
+    plt.axhline(0.90, linestyle="--", color="gray", linewidth=1, label="90% Precision target")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title("Precision-Recall Curve (Test Set)")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    print("\n===== PRECISION-RECALL CURVE =====")
+    print(f"Average Precision (AP) : {avg_precision:.4f}")
+    if chosen_threshold is not None:
+        idx = np.argmin(np.abs(thresholds - chosen_threshold))
+        print(f"At production threshold {chosen_threshold:.2f}: "
+              f"Precision={precisions[idx]:.4f}, Recall={recalls[idx]:.4f}")
 
 
-def plot_bias_variance_vs_regularization(X, y, baseline=None):
-    """
-    Trains logistic regression models for a range of regularisation values C
-    (C = 1/lambda).  Plots training log-loss and CV log-loss vs lambda,
-    mirroring the lab's 'lambda vs. train and CV MSEs' chart.
+# =========================================================
+# Accuracy Bar Chart — now includes the rule-based baseline
+# =========================================================
+def plot_accuracy_bar_chart(model, X_train, y_train, X_cv, y_cv, X_test, y_test,
+                             threshold, raw_test):
 
-    A small C  = strong regularisation -> high bias risk.
-    A large C  = weak  regularisation -> high variance risk.
-    """
-    X_train, X_cv, y_train, y_cv = train_test_split(
-        X, y, test_size=0.20, random_state=42, stratify=y
-    )
+    # --- ZeroR baseline ---
+    zeror_model = DummyClassifier(strategy="most_frequent")
+    zeror_model.fit(X_train, y_train)
+    zeror_acc = accuracy_score(y_test, zeror_model.predict(X_test))
 
-    # C values large -> small  (mirrors lambda small -> large in the lab)
-    C_values = [100, 50, 10, 5, 1, 0.5, 0.2, 0.1, 0.05, 0.01]
-    train_errors, cv_errors = [], []
+    # --- Rule-based baseline (60% income ratio + credit_history) ---
+    rule_preds = rule_based_loan_baseline(raw_test)
+    rule_acc       = accuracy_score(y_test, rule_preds)
+    rule_precision = precision_score(y_test, rule_preds, zero_division=0)
+    rule_recall    = recall_score(y_test, rule_preds, zero_division=0)
+    rule_f1        = f1_score(y_test, rule_preds, zero_division=0)
 
-    for C in C_values:
-        m = LogisticRegression(C=C, max_iter=1000, random_state=42)
-        m.fit(X_train, y_train)
-        train_errors.append(_log_loss_score(m, X_train, y_train))
-        cv_errors.append(_log_loss_score(m, X_cv, y_cv))
+    # --- Actual trained model, no refitting ---
+    train_pred = (model.predict_proba(X_train)[:, 1] >= threshold).astype(int)
+    cv_pred    = (model.predict_proba(X_cv)[:, 1] >= threshold).astype(int)
+    test_pred  = (model.predict_proba(X_test)[:, 1] >= threshold).astype(int)
 
-    lambda_labels = [f"{1/C:.2g}" for C in C_values]   # lambda = 1/C for x-axis
+    train_acc = accuracy_score(y_train, train_pred)
+    cv_acc    = accuracy_score(y_cv, cv_pred)
+    test_acc  = accuracy_score(y_test, test_pred)
+
+    categories = ["ZeroR Baseline", "Rule-Based Baseline", "Train", "CV", "Test"]
+    accuracies = [zeror_acc, rule_acc, train_acc, cv_acc, test_acc]
+    colors = ["gray", "darkorange", "tomato", "steelblue", "seagreen"]
 
     plt.figure(figsize=(10, 6))
-    plt.plot(lambda_labels, train_errors, "ro-", linewidth=2, markersize=7, label="training log-loss")
-    plt.plot(lambda_labels, cv_errors,    "bo-", linewidth=2, markersize=7, label="CV log-loss")
-    if baseline is not None:
-        plt.axhline(baseline, color="cyan", linestyle="--", linewidth=1.5, label="baseline")
-    plt.xlabel("lambda  (regularisation strength = 1/C)", fontsize=11)
-    plt.ylabel("Log-loss", fontsize=11)
-    plt.title("lambda vs. Training and CV Log-Loss\n(Bias/Variance diagnosis)", fontsize=13)
-    plt.legend(fontsize=10)
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.tight_layout()
+    bars = plt.bar(categories, accuracies, color=colors)
+
+    for bar, acc in zip(bars, accuracies):
+        plt.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.01,
+            f"{acc:.4f}",
+            ha="center",
+            fontsize=11,
+            fontweight="bold"
+        )
+
+    plt.ylim(0, 1.05)
+    plt.ylabel("Accuracy")
+    plt.title("Accuracy: ZeroR vs Rule-Based vs Train vs CV vs Test\n(actual production model, no refitting)")
+    plt.grid(axis="y", linestyle="--", alpha=0.5)
     plt.show()
 
-    best_idx   = int(np.argmin(cv_errors))
-    best_C     = C_values[best_idx]
-    best_train = train_errors[best_idx]
-    best_cv    = cv_errors[best_idx]
-    gap        = best_cv - best_train
+    print("\n===== ACCURACY BAR CHART =====")
+    print(f"ZeroR Baseline Accuracy       : {zeror_acc:.4f}")
+    print(f"Rule-Based Baseline Accuracy  : {rule_acc:.4f}")
+    print(f"  (rule: precision={rule_precision:.4f}, recall={rule_recall:.4f}, f1={rule_f1:.4f})")
+    print(f"Train Accuracy                : {train_acc:.4f}")
+    print(f"CV Accuracy                   : {cv_acc:.4f}")
+    print(f"Test Accuracy                 : {test_acc:.4f}")
 
-    print("\n===== BIAS / VARIANCE DIAGNOSIS (regularisation sweep) =====")
-    print(f"Best lambda = {1/best_C:.4g}  (C = {best_C})")
-    print(f"  Training log-loss : {best_train:.4f}")
-    print(f"  CV      log-loss  : {best_cv:.4f}")
-    print(f"  Train-CV gap      : {gap:.4f}")
-
-    if baseline is not None and best_train > baseline * 1.5:
-        print("  [!] HIGH BIAS   - training error is well above baseline.")
-        print("      -> Try: more features, lower lambda, more complex model.")
-    elif gap > 0.10:
-        print("  [!] HIGH VARIANCE - large gap between training and CV error.")
-        print("      -> Try: increase lambda, fewer features, more training data.")
+    if test_acc <= rule_acc:
+        print("[!] WARNING: Model does not outperform the rule-based baseline on test accuracy.")
+    elif test_acc <= zeror_acc:
+        print("[!] WARNING: Model does not outperform the ZeroR baseline on test accuracy.")
     else:
-        print("  [OK] Model appears WELL-BALANCED at this lambda.")
+        print("[OK] Model outperforms both baselines on test accuracy.")
 
-    return C_values, train_errors, cv_errors
-
-
-def plot_bias_variance_vs_training_size(X, y, C=1.0, baseline=None):
-    """
-    Trains the model on progressively larger subsets of the training data
-    and plots learning curves (training log-loss and CV log-loss vs dataset
-    size), mirroring the lab's 'number of examples vs. train and CV MSEs'.
-    """
-    X_train_full, X_cv, y_train_full, y_cv = train_test_split(
-        X, y, test_size=0.20, random_state=42, stratify=y
-    )
-
-    m_total   = X_train_full.shape[0]
-    fractions = np.linspace(0.10, 1.0, 10)
-    sizes     = [max(int(f * m_total), 2) for f in fractions]
-
-    train_errors, cv_errors = [], []
-
-    for size in sizes:
-        X_sub, y_sub = X_train_full[:size], y_train_full[:size]
-        if len(np.unique(y_sub)) < 2:
-            train_errors.append(np.nan)
-            cv_errors.append(np.nan)
-            continue
-        m = LogisticRegression(C=C, max_iter=1000, random_state=42)
-        m.fit(X_sub, y_sub)
-        train_errors.append(_log_loss_score(m, X_sub, y_sub))
-        cv_errors.append(_log_loss_score(m, X_cv, y_cv))
-
-    total_sizes = [s + len(X_cv) for s in sizes]
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(total_sizes, train_errors, "ro-", linewidth=2, markersize=7, label="training log-loss")
-    plt.plot(total_sizes, cv_errors,    "bo-", linewidth=2, markersize=7, label="CV log-loss")
-    if baseline is not None:
-        plt.axhline(baseline, color="cyan", linestyle="--", linewidth=1.5, label="baseline")
-    plt.xlabel("total number of training and CV examples", fontsize=11)
-    plt.ylabel("Log-loss", fontsize=11)
-    plt.title(f"number of examples vs. Training and CV Log-Loss  (C={C})\nLearning curve / Bias-Variance diagnosis", fontsize=13)
-    plt.legend(fontsize=10)
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.tight_layout()
-    plt.show()
-
-    final_train = train_errors[-1]
-    final_cv    = cv_errors[-1]
-    gap         = final_cv - final_train
-
-    print("\n===== BIAS / VARIANCE DIAGNOSIS (learning curve) =====")
-    print(f"  Final training log-loss : {final_train:.4f}")
-    print(f"  Final CV      log-loss  : {final_cv:.4f}")
-    print(f"  Train-CV gap            : {gap:.4f}")
-
-    if baseline is not None and final_train > baseline * 1.5:
-        print("  [!] HIGH BIAS   - adding more data will NOT help much.")
-        print("      -> Try: more/better features, reduce regularisation.")
-    elif gap > 0.10:
-        print("  [!] HIGH VARIANCE - more training data may help close the gap.")
-        print("      -> Try: more data, increase lambda, remove noisy features.")
-    else:
-        print("  [OK] Model appears WELL-BALANCED.")
+    gap = train_acc - cv_acc
+    if gap > 0.10:
+        print(f"[!] HIGH VARIANCE - large train/CV accuracy gap ({gap:.4f}).")
 
 
-# -----------------------------------------------------------------------
-# Main evaluation entry point
-# -----------------------------------------------------------------------
+# =========================================================
+# Main Evaluation
+# =========================================================
 def evaluate_model():
-    df = fetch_training_data()
-    df = apply_feature_engineering(df)
-    if df.empty:
-        print("No labeled training data available for evaluation.")
-        return
-    
-    print(df.columns)
-    for feature in df.columns:
-        if feature != "loan_status":
-            sns.scatterplot(
-                data=df,
-                x=feature,
-                y="loan_status",
-                hue="loan_status",
-                alpha=0.1
-            )
-        plt.show()
-    X_scaled, y_true, s, e, f_n, model = preprocess_data(df)
-    del s, e, f_n, model
 
-    # ------------------------------------------------------------------
-    # Paths
-    # ------------------------------------------------------------------
-    ARTIFACT_DIR = "app/artifacts"
-    MODEL_PATH   = os.path.join(ARTIFACT_DIR, "model.pkl")
-    SCALER_PATH  = os.path.join(ARTIFACT_DIR, "scaler.pkl")
-    ENCODER_PATH = os.path.join(ARTIFACT_DIR, "encoders.pkl")
-    FEATURE_PATH = os.path.join(ARTIFACT_DIR, "feature_names.pkl")
-
-    # ------------------------------------------------------------------
-    # Load Artifacts
-    # ------------------------------------------------------------------
-    loaded_model  = joblib.load(MODEL_PATH)
+    model         = joblib.load(MODEL_PATH)
     scaler        = joblib.load(SCALER_PATH)
     encoders      = joblib.load(ENCODER_PATH)
     feature_names = joblib.load(FEATURE_PATH)
+    threshold     = joblib.load(THRESHOLD_PATH)
 
-    y_pred = loaded_model.predict(X_scaled)
+    X_train = joblib.load(X_TRAIN_PATH)
+    y_train = joblib.load(Y_TRAIN_PATH)
+    X_cv    = joblib.load(X_CV_PATH)
+    y_cv    = joblib.load(Y_CV_PATH)
+    X_test  = joblib.load(X_TEST_PATH)
+    y_test  = joblib.load(Y_TEST_PATH)
+    raw_test = joblib.load(RAW_TEST_PATH)        # <-- added
 
-    accuracy  = accuracy_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred, zero_division=0)
-    recall    = recall_score(y_true, y_pred, zero_division=0)
-    f1        = f1_score(y_true, y_pred, zero_division=0)
-    cm        = confusion_matrix(y_true, y_pred)
-    report    = classification_report(y_true, y_pred, zero_division=0)
+    y_proba = model.predict_proba(X_test)[:, 1]
+    y_pred  = (y_proba >= threshold).astype(int)
 
-    print("\n===== MODEL EVALUATION REPORT =====")
-    print(f"Accuracy:  {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall:    {recall:.4f}")
-    print(f"F1 Score:  {f1:.4f}")
-    print("\nConfusion Matrix:")
+    accuracy  = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, zero_division=0)
+    recall    = recall_score(y_test, y_pred, zero_division=0)
+    f1        = f1_score(y_test, y_pred, zero_division=0)
+    cm        = confusion_matrix(y_test, y_pred)
+    report    = classification_report(y_test, y_pred, zero_division=0)
+
+    print("\n===== MODEL EVALUATION (Test Set) =====")
+    print(f"Threshold used : {threshold:.2f}")
+    print(f"Accuracy  : {accuracy:.4f}")
+    print(f"Precision : {precision:.4f}")
+    print(f"Recall    : {recall:.4f}")
+    print(f"F1 Score  : {f1:.4f}")
+
+    if precision < 0.90:
+        print("[!] WARNING: Precision target of 0.90 was NOT met on the test set.")
+    else:
+        print("[OK] Precision target of 0.90 met.")
+
+    print("\n===== CONFUSION MATRIX =====")
     print(cm)
-    print("\nClassification Report:")
+    print("\n===== CLASSIFICATION REPORT =====")
     print(report)
 
-    # ------------------------------------------------------------------
-    # Cost function plots (b-sweep and w-sweep)
-    # ------------------------------------------------------------------
-    plot_cost_function(X_scaled, y_true)
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.title("Confusion Matrix (Test Set)")
+    plt.show()
 
-    # ------------------------------------------------------------------
-    # Bias / Variance diagnosis
-    # Baseline = log-loss of the loaded model on the full dataset.
-    # Override with a domain-specific float if needed, e.g. baseline=0.30
-    # ------------------------------------------------------------------
-    baseline_log_loss = _log_loss_score(loaded_model, X_scaled, y_true)
-    print(f"\nBaseline log-loss (loaded model, full data): {baseline_log_loss:.4f}")
+    plot_precision_recall_curve(y_test, y_proba, chosen_threshold=threshold)
 
-    # Plot 1: log-loss vs regularisation strength (lambda sweep)
-    C_values, train_errs, cv_errs = plot_bias_variance_vs_regularization(
-        X_scaled, y_true, baseline=baseline_log_loss
-    )
+    plot_cost_function(X_train, y_train)
 
-    # Use best C from the sweep for the learning curve
-    best_C = C_values[int(np.argmin(cv_errs))]
-
-    # Plot 2: learning curve (log-loss vs training set size)
-    plot_bias_variance_vs_training_size(
-        X_scaled, y_true, C=best_C, baseline=baseline_log_loss
+    plot_accuracy_bar_chart(
+        model, X_train, y_train, X_cv, y_cv, X_test, y_test, threshold, raw_test
     )
 
     return {
+        "threshold":        threshold,
         "accuracy":         accuracy,
         "precision":        precision,
         "recall":           recall,
@@ -337,8 +285,5 @@ def evaluate_model():
     }
 
 
-# ------------------------------------------------------------------
-# Run standalone
-# ------------------------------------------------------------------
 if __name__ == "__main__":
     evaluate_model()

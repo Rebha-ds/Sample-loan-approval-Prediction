@@ -1,5 +1,4 @@
-# app/features/loan_prediction/utils/preprocessing.py
-
+import numpy as np
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 import pandas as pd
@@ -174,3 +173,52 @@ def apply_feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df['loan_amount_term']  = pd.to_numeric(df['loan_amount_term'],  errors='coerce').fillna(0).astype('int64') ** 3
     df['property_area']     = pd.to_numeric(df['property_area'],     errors='coerce').fillna(0).astype('int64') ** 2
     return df
+# =========================================================
+# Rule-Based Baseline Helpers
+# =========================================================
+def extract_rule_baseline_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extracts and cleans the RAW columns needed for the rule-based baseline.
+
+    IMPORTANT: must be called BEFORE apply_feature_engineering(), since that
+    function raises these same columns to powers for the ML model's features.
+    Calling it after would give you transformed values, not real
+    income/loan amounts.
+    """
+    raw = df.copy()
+    raw.columns = raw.columns.str.lower()
+
+    for col in ["applicantincome", "coapplicantincome", "loanamount", "credit_history"]:
+        raw[col] = pd.to_numeric(raw[col], errors="coerce").fillna(0)
+
+    return raw[["applicantincome", "coapplicantincome", "loanamount", "credit_history"]]
+
+
+def rule_based_loan_baseline(raw_features: pd.DataFrame) -> np.ndarray:
+    """
+    Simple rule-based baseline. Rejects a loan (predicts 0) if:
+      1. loan amount > 60% of total income (applicant + coapplicant), OR
+      2. credit_history == 0
+
+    Otherwise approves (predicts 1).
+
+    Args:
+        raw_features: DataFrame with RAW (untransformed, unscaled) columns
+            ['applicantincome', 'coapplicantincome', 'loanamount', 'credit_history']
+
+    Returns:
+        np.ndarray of 0/1 predictions (1 = Approved, 0 = Rejected)
+    """
+    total_income = raw_features["applicantincome"] + raw_features["coapplicantincome"]
+
+    income_ratio = raw_features["loanamount"] / total_income.replace(0, np.nan)
+
+    high_loan_ratio = income_ratio > 0.60
+    # If total income is 0, ratio is undefined -> can't afford -> reject
+    high_loan_ratio = high_loan_ratio.fillna(True)
+
+    no_credit_history = raw_features["credit_history"] == 0
+
+    reject = high_loan_ratio | no_credit_history
+
+    return np.where(reject, 0, 1)

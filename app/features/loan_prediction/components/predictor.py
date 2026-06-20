@@ -4,16 +4,18 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from app.features.loan_prediction.models.loan_model import LoanPredictTrain
 
-ARTIFACT_DIR = "app/artifacts"
-MODEL_PATH   = os.path.join(ARTIFACT_DIR, "model.pkl")
-SCALER_PATH  = os.path.join(ARTIFACT_DIR, "scaler.pkl")
-ENCODER_PATH = os.path.join(ARTIFACT_DIR, "encoders.pkl")
-FEATURE_PATH = os.path.join(ARTIFACT_DIR, "feature_names.pkl")
+ARTIFACT_DIR    = "app/artifacts"
+MODEL_PATH      = os.path.join(ARTIFACT_DIR, "model.pkl")
+SCALER_PATH     = os.path.join(ARTIFACT_DIR, "scaler.pkl")
+ENCODER_PATH    = os.path.join(ARTIFACT_DIR, "encoders.pkl")
+FEATURE_PATH    = os.path.join(ARTIFACT_DIR, "feature_names.pkl")
+THRESHOLD_PATH  = os.path.join(ARTIFACT_DIR, "threshold.pkl")   # <-- added
 
-model     = joblib.load(MODEL_PATH)
-scaler    = joblib.load(SCALER_PATH)
-encoders  = joblib.load(ENCODER_PATH)
+model         = joblib.load(MODEL_PATH)
+scaler        = joblib.load(SCALER_PATH)
+encoders      = joblib.load(ENCODER_PATH)
 feature_names = joblib.load(FEATURE_PATH)
+threshold     = joblib.load(THRESHOLD_PATH)                      # <-- added
 
 
 def preprocess_payload(payload):
@@ -58,15 +60,17 @@ def preprocess_payload(payload):
 def predict_loan(payload, db: Session):
     processed_data = preprocess_payload(payload)
 
-    prediction  = model.predict(processed_data)[0]
-    confidence  = max(model.predict_proba(processed_data)[0]) * 100
+    # Use predict_proba + tuned threshold instead of default .predict()
+    proba = model.predict_proba(processed_data)[0]
+    prediction = 1 if proba[1] >= threshold else 0
+    confidence = max(proba) * 100
+
     prediction_result = "Approved" if prediction == 1 else "Rejected"
 
-    return prediction_result, round(confidence, 2)          # no retrained flag
+    return prediction_result, round(confidence, 2)
 
 
 def save_prediction(db, user_id, payload, prediction, confidence):
-    print("USER ID RECEIVED:", user_id)
     new_record = LoanPredictTrain(
         user_id=user_id,
         gender=payload.gender,
@@ -83,7 +87,7 @@ def save_prediction(db, user_id, payload, prediction, confidence):
         prediction=prediction,
         confidence=confidence,
     )
-    
+
     try:
         db.add(new_record)
         db.commit()
